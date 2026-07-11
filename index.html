@@ -653,13 +653,28 @@
     .primary-btn:hover { transform:none; }
   }
 
-  /* ── Top search (filters the current tab's list) ── */
+  /* ── Top search (filters the current tab's list, and/or jumps anywhere) ── */
   .topsearch { position:relative; flex:1; max-width:340px; min-width:0; }
   .topsearch input { width:100%; background:var(--screen2); border:1px solid var(--rule); border-radius:10px; padding:9px 12px 9px 34px; color:var(--ink); font-size:13px; font-family:'Inter'; outline:none; transition:border-color .2s; }
   .topsearch input:focus { border-color:var(--accent); }
   .topsearch input::placeholder { color:var(--ink4); }
   .topsearch .ic { position:absolute; left:11px; top:50%; transform:translateY(-50%); width:15px; height:15px; opacity:.5; pointer-events:none; }
   .topsearch.hidden { display:none; }
+  mark { background:rgba(195,88,255,0.28); color:var(--ink); border-radius:3px; padding:0 1px; }
+
+  /* ── Global search results dropdown (jump to anywhere) ── */
+  .gsr { display:none; position:absolute; top:calc(100% + 8px); left:0; right:0; max-height:min(70vh,520px); overflow-y:auto;
+    background:var(--screen2); border:1px solid var(--rule); border-radius:14px; box-shadow:0 16px 40px rgba(0,0,0,0.45); z-index:30; padding:6px; }
+  .gsr.on { display:block; }
+  .gsr-empty { padding:16px 14px; color:var(--ink4); font-size:12.5px; }
+  .gsr-group + .gsr-group { border-top:1px solid var(--rule2); margin-top:4px; padding-top:4px; }
+  .gsr-group-h { display:flex; align-items:center; gap:7px; font-family:'JetBrains Mono',monospace; font-size:9.5px; letter-spacing:1.6px; text-transform:uppercase; color:var(--ink4); padding:8px 10px 4px; }
+  .gsr-group-h .ic { width:12px; height:12px; opacity:.7; }
+  .gsr-more { color:var(--ink4); font-weight:400; text-transform:none; letter-spacing:0; }
+  .gsr-row { padding:8px 10px; border-radius:8px; cursor:pointer; }
+  .gsr-row:hover { background:var(--screen3); }
+  .gsr-label { font-size:13px; color:var(--ink); line-height:1.35; }
+  .gsr-sub { font-size:11px; color:var(--ink3); margin-top:2px; line-height:1.35; }
 
   /* ── Per-tab description (for a non-technical cofounder) ── */
   .tab-desc { font-size:13px; color:var(--ink3); line-height:1.55; margin:-8px 0 18px; max-width:760px; }
@@ -821,9 +836,13 @@
   <main>
     <div class="topbar">
       <div class="sec-title" id="secTitle">Overview</div>
-      <div class="topsearch hidden" id="topSearchWrap">
-        <input id="topSearch" type="search" placeholder="Search…" autocomplete="off"
-          oninput="onTopSearch(this.value)">
+      <div class="topsearch" id="topSearchWrap">
+        <svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4.3-4.3"/></svg>
+        <input id="topSearch" type="search" placeholder="Search the dashboard…" autocomplete="off"
+          oninput="onTopSearch(this.value)" onfocus="onTopSearch(this.value)"
+          onkeydown="if(event.key==='Escape'){this.value='';onTopSearch('');this.blur();}
+            else if(event.key==='Enter'&&GSR_ITEMS.length){jumpToGlobalResult(GSR_ITEMS[0].tab);}">
+        <div id="globalSearchResults" class="gsr"></div>
       </div>
       <div class="hdr-right">
         <span id="lastRefresh"></span>
@@ -923,6 +942,15 @@ const sb = supabase.createClient(SB_URL, SB_KEY, {
 });
 
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+// Escapes text, then wraps every case-insensitive match of `q` in <mark> —
+// used by any search-filtered view (roadmap, global search) so a match is
+// visible at a glance instead of just "this row survived the filter".
+function hl(s, q) {
+  const safe = esc(s);
+  if (!q) return safe;
+  const escQ = esc(q).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return safe.replace(new RegExp('(' + escQ + ')', 'ig'), '<mark>$1</mark>');
+}
 const fmtDate = d => d ? new Date(d).toLocaleString('en-GB', { day:'numeric', month:'short', hour:'2-digit', minute:'2-digit' }) : '—';
 // The `pass` arg is kept in every think_admin_* signature for call-site
 // compatibility but is ignored server-side; authorization is is_admin_caller().
@@ -962,6 +990,7 @@ const ICONS = {
   mapPin:'<path d="M12 21c-4-4.5-7-7.8-7-11a7 7 0 0 1 14 0c0 3.2-3 6.5-7 11z"/><circle cx="12" cy="10" r="2.6"/>',
   gem:'<path d="M6 3h12l3 5-9 13L3 8l3-5z"/><path d="M3 8h18"/><path d="M9 3l3 18M15 3l-3 18M9 3L6 8l6 13M15 3l3 5-6 13"/>',
   x:'<path d="M6 6l12 12M18 6L6 18"/>',
+  search:'<circle cx="11" cy="11" r="7"/><path d="M20 20l-4.3-4.3"/>',
 };
 const ic = (name, cls='') => `<svg class="ic ${cls}" viewBox="0 0 24 24" aria-hidden="true">${ICONS[name] || ''}</svg>`;
 
@@ -1010,6 +1039,7 @@ const SEARCH_TABS = {
   waitlist:  'Search emails…',
   deck:      'Search respondents…',
   outreach:  'Search creators…',
+  roadmap:   'Search the roadmap and work log…',
 };
 let SEARCH_Q = '';
 
@@ -1124,6 +1154,7 @@ const SEARCH_RENDERERS = {
   waitlist:  () => renderWaitlist(WAITLIST_ROWS),
   deck:      () => renderDeck(DECK_ROWS),
   outreach:  () => renderOutreach(),
+  roadmap:   () => renderRoadmap(),
 };
 // matches a search query against a set of fields (case-insensitive)
 const matchSearch = (q, ...fields) =>
@@ -1145,26 +1176,125 @@ function show(name) {
     view.insertAdjacentHTML('afterbegin', `<div class="tab-desc">${TAB_DESC[name]}</div>`);
   }
 
-  // Top search: only on tabs with a list to filter. Reset the query on tab switch.
-  const wrap = document.getElementById('topSearchWrap');
+  // Top search is always available now (global search across every tab).
+  // Tabs with their own filterable list (SEARCH_TABS) still get a tailored
+  // placeholder and live-filter as you type; every other tab falls back to
+  // the global "jump to anywhere" placeholder. Reset the query on tab switch.
   const inp = document.getElementById('topSearch');
   SEARCH_Q = '';
-  if (SEARCH_TABS[name]) {
-    wrap.classList.remove('hidden');
-    inp.placeholder = SEARCH_TABS[name];
-    inp.value = '';
-  } else {
-    wrap.classList.add('hidden');
-  }
+  inp.placeholder = SEARCH_TABS[name] || 'Search the dashboard…';
+  inp.value = '';
+  closeGlobalSearch();
   window.scrollTo({ top: 0 });
 }
 
-// Re-render the active tab's list filtered by the search box.
+// Re-render the active tab's list filtered by the search box (if it has
+// one), and always refresh the cross-tab "jump to" results below the box.
 function onTopSearch(v) {
   SEARCH_Q = v;
   const r = SEARCH_RENDERERS[ACTIVE_TAB];
   if (r) r();
+  renderGlobalSearch(v);
 }
+
+// ── Global search — one box, every tab ──────────────────────────────
+// Builds a fresh index every keystroke (cheap at dashboard scale: a few
+// hundred entries at most) covering both STATIC reference content (tab
+// names, the roadmap, the stack map, the free/THINK+ feature table — the
+// stuff a cofounder actually asked to be able to find) and the LIVE lists
+// already loaded into memory for their own tabs (questions, users, stories,
+// waitlist, deck, venues, outreach, notifications, reports, feedback,
+// to-dos, agent guides). Nothing is fetched specially for search — it reads
+// whatever each tab's own loader already populated, so results are never
+// stale relative to what that tab itself shows.
+function buildGlobalIndex() {
+  const idx = [];
+  const add = (tab, label, sub) => { if (label) idx.push({ tab, label: String(label), sub: sub ? String(sub) : '' }); };
+
+  // Tabs themselves, so typing a tab's name (or a word from its description) jumps there.
+  for (const t of TABS) add(t, TAB_TITLES[t], TAB_DESC[t]);
+
+  // Roadmap — journey steps + stage titles.
+  for (const [title, , sub, steps] of JOURNEY) {
+    add('roadmap', title, sub);
+    for (const [, text] of steps) add('roadmap', text, title);
+  }
+  // Roadmap — work log (lead sentence only, so results stay short).
+  for (const [day, items] of WORKLOG) {
+    for (const item of items) add('roadmap', String(item).split(/(?<=[.!?])\s+(?=[A-Z0-9“"(])/)[0], day);
+  }
+
+  // Stack — app surfaces + tech layers.
+  for (const [t, d] of STACK_APP_ITEMS) add('stack', t, d);
+  for (const [label, items] of STACK_TECH_LAYERS) for (const i of items) add('stack', i, label);
+
+  // Product — the free vs THINK+ feature table.
+  for (const row of PLUS_COMPARE) if (row.feat) add('product', row.feat, row.sub);
+
+  // Live lists, if their tab has loaded them yet (all optional/best-effort).
+  try { for (const q of (QUESTION_ROWS || [])) add('questions', q.text, q.category); } catch {}
+  try { for (const u of (USERS_ROWS || [])) add('users', u.name || u.handle, u.email); } catch {}
+  try { for (const s of (STORIES_ROWS || [])) add('stories', s.title, s.author_handle); } catch {}
+  try { for (const v of (VENUES || [])) add('venues', v.name, v.suburb); } catch {}
+  try { for (const w of (WAITLIST_ROWS || [])) add('waitlist', w.email, w.referrer); } catch {}
+  try { for (const d of (DECK_ROWS || [])) add('deck', d.name, d.role); } catch {}
+  try { for (const o of (OUT_ROWS || [])) add('outreach', o.name, o.stage); } catch {}
+  try { for (const t of (TODOS || [])) add('todo', t.title, t.notes || t.category); } catch {}
+  try { for (const p of ((AGENTS && AGENTS.personas) || [])) add('agents', p.display_name, `@${p.handle} · ${p.category}`); } catch {}
+  try { for (const n of (NOTIF_ROWS || [])) add('notify', n.title, n.body); } catch {}
+  try { for (const r of (REPORT_ROWS || [])) add('reports', r.reason || r.comment_body, r.status); } catch {}
+  try { for (const f of (FEEDBACK_ROWS || [])) add('feedback', f.message, f.category); } catch {}
+
+  return idx;
+}
+
+let GSR_ITEMS = [];
+function renderGlobalSearch(q) {
+  const box = document.getElementById('globalSearchResults');
+  q = (q || '').trim();
+  if (!q || q.length < 2) { box.classList.remove('on'); GSR_ITEMS = []; return; }
+  const ql = q.toLowerCase();
+  const matches = buildGlobalIndex()
+    .filter(e => e.label.toLowerCase().includes(ql) || e.sub.toLowerCase().includes(ql))
+    .slice(0, 60);
+  // Group by tab, cap each group so one huge list (e.g. the work log) can't
+  // crowd out everything else; overall cap keeps the dropdown scrollable, not endless.
+  const byTab = {};
+  for (const m of matches) (byTab[m.tab] ??= []).push(m);
+  GSR_ITEMS = [];
+  const groups = Object.keys(byTab).map(tab => {
+    const rows = byTab[tab].slice(0, 6);
+    rows.forEach(r => GSR_ITEMS.push(r));
+    return `<div class="gsr-group">
+      <div class="gsr-group-h">${ic(NAV_ICONS[tab] || 'grid')}${esc(TAB_TITLES[tab] || tab)}${byTab[tab].length > 6 ? ` <span class="gsr-more">+${byTab[tab].length - 6} more</span>` : ''}</div>
+      ${rows.map((r, i) => `<div class="gsr-row" onmousedown="jumpToGlobalResult('${tab}')">
+        <div class="gsr-label">${hl(r.label, q)}</div>
+        ${r.sub ? `<div class="gsr-sub">${hl(r.sub, q)}</div>` : ''}
+      </div>`).join('')}
+    </div>`;
+  });
+  box.innerHTML = groups.length ? groups.join('') : `<div class="gsr-empty">No matches for "${esc(q)}" anywhere in the dashboard.</div>`;
+  box.classList.add('on');
+}
+function closeGlobalSearch() {
+  const box = document.getElementById('globalSearchResults');
+  if (box) box.classList.remove('on');
+}
+// Jump to the matched tab. If that tab supports its own list-filter, carry
+// the term over so it lands already filtered to the thing you searched for.
+function jumpToGlobalResult(tab) {
+  const q = document.getElementById('topSearch').value;
+  show(tab);
+  if (SEARCH_TABS[tab]) {
+    document.getElementById('topSearch').value = q;
+    onTopSearch(q);
+  } else {
+    closeGlobalSearch();
+  }
+}
+document.addEventListener('click', (e) => {
+  if (!e.target.closest('#topSearchWrap')) closeGlobalSearch();
+});
 
 // Ensure the per-tab description survives a re-render of the view's innerHTML.
 function withDesc(name, html) {
@@ -3370,21 +3500,34 @@ const WORKLOG = [
   ]],
 ];
 
+// Hoisted to module scope (not just local to renderStack()) so the global
+// search index can read the same source of truth — one place to update.
+const STACK_APP_ITEMS = [
+  ['Onboarding & account', 'An account is required. A short wizard: name, handle, age gate, and a profile photo.'],
+  ['Home', 'A ranked feed of questions plus the voice rail (one circle per author).'],
+  ['3 World Questions', 'Every week the whole world answers the same 3 yes/no questions, one global split.'],
+  ['THINK Lobby', 'Meet people in real life around a topic — a meeting point, a time, request-to-join, group chat, QR arrival for Ripples. One of the 4 main tabs.'],
+  ['Voice stories', 'Record a short take, explore others, ranked by a world leaderboard of listens.'],
+  ['Like-Minded', 'A score for how aligned two people are, from how they both answer plus interests, shares and comment activity.'],
+  ['Daily Parallel', 'THINK+ only: one AI-picked 90%+ Like-Minded match a day, with combinable filters (friends only, networking only, gender, a private age range).'],
+  ['Street Poll & Like-Minded Quiz', 'Two street/content tools for capturing real reactions in person — one question polled repeatedly with a live tally, and a two-person head-to-head quiz.'],
+  ['Messages', 'Direct chat plus the Like-Minded connection-card ice-breaker. Hold a message to react.'],
+  ['THINK Connect', 'Meet other members in person via QR code. Both people earn Ripples and the Socialising badge.'],
+  ['Profile', 'Own and peer views: socials, the questions you submitted, your stats.'],
+  ['Ripple Points & THINK+', 'Earn the in-app currency, redeem rewards, and the THINK+ membership.'],
+  ['Ask THINK AI', 'Conversational sentiment search (answers spoken from real votes). Live now, reachable from the search icon on Home — 3/day free, unlimited on THINK+.'],
+  ['Simple mode', 'An accessibility mode (bigger text, read-aloud, a simplified 3-door nav) for elderly or low-vision users. Opt in from Settings.'],
+  ['Settings', 'Privacy controls, account, language, and notifications.'],
+];
+const STACK_TECH_LAYERS = [
+  ['CLIENT (the app)', ['Expo / React Native (SDK 54)', 'TypeScript', 'EAS Build → TestFlight / App Store'], 'var(--accent-hi)'],
+  ['SUPABASE (the backend)', ['Postgres + RLS', 'Auth (GoTrue)', 'Storage', 'Edge Functions (Deno)', 'Realtime'], 'var(--green)'],
+  ['EDGE FUNCTIONS (the logic)', ['ask-think-ai (Claude search)', 'storage-put / upload-avatar (uploads)', 'validate-iap-receipt / validate-play-purchase (subscriptions)', 'persona-agent (18 AI guides vote + reply)', 'match-of-day-agent (Daily Parallel)', 'question-tts / voice-captions (ElevenLabs voice)', 'comment-summary / refresh-comment-summaries', 'lm-agent (Like-Minded accuracy)', 'notify / insights / marketing / moderate agents', 'curate-weekly-questions', 'stripe-webhook'], 'var(--accent-hi)'],
+  ['EXTERNAL SERVICES', ['Anthropic Claude (AI + agents)', 'ElevenLabs (voice + captions)', 'Stripe (web pay)', 'Apple IAP + Google Play Billing (subscriptions)'], 'var(--ink3)'],
+];
+
 function renderStack() {
   const appCard = (t, d) => `<div class="stk-card"><div class="stk-t">${t}</div><div class="stk-d">${d}</div></div>`;
-  const APP = [
-    ['Onboarding & account', 'An account is required. A short wizard: name, handle, age gate, and a profile photo.'],
-    ['Home', 'A ranked feed of questions plus the voice rail (one circle per author).'],
-    ['3 World Questions', 'Every week the whole world answers the same 3 yes/no questions, one global split.'],
-    ['Voice stories', 'Record a short take, explore others, ranked by a world leaderboard of listens.'],
-    ['Like-Minded', 'A score for how aligned two people are, from how they both answer plus interests.'],
-    ['Messages', 'Direct chat plus the Like-Minded connection-card ice-breaker. Hold a message to react.'],
-    ['THINK Connect', 'Meet other members in person with a QR code. Both people earn Ripples and the Socialising badge.'],
-    ['Profile', 'Own and peer views: socials, the questions you submitted, your stats.'],
-    ['Ripple Points & THINK+', 'Earn the in-app currency, redeem rewards, and the THINK+ membership.'],
-    ['Ask THINK AI · post-launch', 'Conversational sentiment search (answers spoken from real votes). Built and quietly collecting data; the search button is hidden for launch and switches on later.'],
-    ['Settings', 'Privacy controls, account, language, and notifications.'],
-  ];
   const layer = (label, items, accent) => `
     <div class="stk-layer">
       <div class="stk-layer-label" style="color:${accent}">${label}</div>
@@ -3394,17 +3537,11 @@ function renderStack() {
     <div class="stk-wrap">
       <div class="toolbar" style="justify-content:flex-start"><a href="../think-brain/ARCHITECTURE.html" target="_blank" rel="noopener"><button>OPEN FULL SYSTEM MAP (data-flow diagram)</button></a></div>
       <div class="stk-section-h">The app — what people use</div>
-      <div class="stk-grid">${APP.map(([t,d]) => appCard(t,d)).join('')}</div>
+      <div class="stk-grid">${STACK_APP_ITEMS.map(([t,d]) => appCard(t,d)).join('')}</div>
 
       <div class="stk-section-h" style="margin-top:30px">The tech — what runs it</div>
       <div class="stk-stack">
-        ${layer('CLIENT (the app)', ['Expo / React Native (SDK 54)', 'TypeScript', 'EAS Build → TestFlight / App Store'], 'var(--accent-hi)')}
-        <div class="stk-arrow">↓</div>
-        ${layer('SUPABASE (the backend)', ['Postgres + RLS', 'Auth (GoTrue)', 'Storage', 'Edge Functions (Deno)', 'Realtime'], 'var(--green)')}
-        <div class="stk-arrow">↓</div>
-        ${layer('EDGE FUNCTIONS (the logic)', ['ask-think-ai (Claude search)', 'storage-put / upload-avatar (uploads)', 'validate-iap-receipt (subscriptions)', 'notify / insights / marketing / moderate agents', 'curate-weekly-questions'], 'var(--accent-hi)')}
-        <div class="stk-arrow">↓</div>
-        ${layer('EXTERNAL SERVICES', ['Anthropic Claude (AI + agents)', 'ElevenLabs (voice)', 'Stripe (web pay)', 'Apple IAP (subscriptions)'], 'var(--ink3)')}
+        ${STACK_TECH_LAYERS.map(([label, items, accent], i) => (i > 0 ? '<div class="stk-arrow">↓</div>' : '') + layer(label, items, accent)).join('')}
       </div>
       <div class="stk-note"><b>Website:</b> think-app.com on Netlify (hero, features, waitlist). &nbsp; <b>Golden rule:</b> cache-first, the app reads from caches and the agents spend on the AI only on a genuine miss, so cost stays low.</div>
     </div>
@@ -3437,21 +3574,31 @@ function renderRoadmap() {
     .filter(([st, t]) => st === 'now' && /^FOUNDER:|email confirmation|ANTHROPIC/i.test(t))
     .map(([, t]) => t);
 
+  // Search filters the STAGE ROWS and WORKLOG ITEMS shown, never the summary
+  // numbers above (done/now/next/pct/blockers always describe the WHOLE
+  // roadmap, so the bar never jumps around while you're typing).
+  const q = (SEARCH_Q || '').trim().toLowerCase();
+  const stageMatches = (title, sub) => !q || title.toLowerCase().includes(q) || sub.toLowerCase().includes(q);
+
   const stages = JOURNEY.map(([title, cat, sub, steps], i) => {
+    const wholeStageMatches = stageMatches(title, sub);
+    const shownSteps = (q && !wholeStageMatches) ? steps.filter(([, t]) => t.toLowerCase().includes(q)) : steps;
+    if (q && shownSteps.length === 0) return '';
+    // Progress badge always reflects the REAL stage, not the filtered rows.
     const sd = steps.filter(([st]) => st === 'done').length;
     const dominant = steps.every(([st]) => st === 'done') ? 'done'
       : steps.some(([st]) => st === 'now') ? 'now'
       : steps.some(([st]) => st === 'next') ? 'next' : 'later';
-    const rows = steps.map(([st, t, todo]) => `
+    const rows = shownSteps.map(([st, t, todo]) => `
       <div class="step ${st === 'done' ? 'is-done' : ''}">
         <span class="dot ${st}">${STATUS_ICON[st]}</span>
-        <div class="step-main"><div class="t">${t}</div></div>
+        <div class="step-main"><div class="t">${hl(t, q)}</div></div>
         ${todo ? `<button class="step-add" title="Add to the To-Do list" onclick="quickTodo('${t.replace(/^FOUNDER:\s*/, '').trim().replace(/'/g, "\\'")}', '${cat}')">+ TO-DO</button>` : ''}
       </div>`).join('');
     const stageIcon = ['layers', 'sparkles', 'shield', 'rocket', 'users'][i] || 'flag';
     return `<div class="stage s-${dominant}">
-      <div class="stage-head"><span class="stage-num">STAGE ${i + 1}</span><h3>${ic(stageIcon)}${title}</h3><span class="pct">${sd}/${steps.length}</span></div>
-      <p>${sub}</p>${rows}</div>`;
+      <div class="stage-head"><span class="stage-num">STAGE ${i + 1}</span><h3>${ic(stageIcon)}${hl(title, q)}</h3><span class="pct">${sd}/${steps.length}</span></div>
+      <p>${hl(sub, q)}</p>${rows}</div>`;
   }).join('');
 
   // Render each log entry as scannable bullets. Long paragraphs are split into a
@@ -3463,20 +3610,25 @@ function renderRoadmap() {
     if (parts.length <= 1) return { lead: text, rest: [] };
     return { lead: parts[0], rest: parts.slice(1) };
   };
-  const worklog = `<div class="worklog">
-    <h3>${ic('check')} Work done</h3>
-    ${WORKLOG.map(([day, items]) => `
-      <div class="day">${day}</div>
-      ${items.map(i => {
+  const dayMatches = day => !q || day.toLowerCase().includes(q);
+  const worklogDays = WORKLOG.map(([day, items]) => {
+    const shownItems = dayMatches(day) ? items : items.filter(i => i.toLowerCase().includes(q));
+    if (q && shownItems.length === 0) return '';
+    return `<div class="day">${hl(day, q)}</div>
+      ${shownItems.map(i => {
         const { lead, rest } = splitEntry(i);
         return `<div class="wl-item">${ic('check')}<div style="flex:1;min-width:0">
-          <div${rest.length ? ' style="font-weight:600;color:var(--ink)"' : ''}>${lead}</div>
-          ${rest.length ? `<ul style="list-style:disc;margin:6px 0 2px;padding-left:18px">${rest.map(r => `<li style="padding:2px 0;color:var(--ink3);line-height:1.5">${r}</li>`).join('')}</ul>` : ''}
+          <div${rest.length ? ' style="font-weight:600;color:var(--ink)"' : ''}>${hl(lead, q)}</div>
+          ${rest.length ? `<ul style="list-style:disc;margin:6px 0 2px;padding-left:18px">${rest.map(r => `<li style="padding:2px 0;color:var(--ink3);line-height:1.5">${hl(r, q)}</li>`).join('')}</ul>` : ''}
         </div></div>`;
-      }).join('')}
-    `).join('')}
+      }).join('')}`;
+  }).join('');
+  const worklog = `<div class="worklog">
+    <h3>${ic('check')} Work done</h3>
+    ${worklogDays || (q ? `<div class="empty" style="padding:18px 0">No matches in the work log for “${esc(SEARCH_Q)}”.</div>` : '')}
   </div>`;
 
+  const noStageMatches = q && !stages;
   document.getElementById('view-roadmap').innerHTML = withDesc('roadmap', `
     <div class="rm-summary">
       <h3>Where we are until launch</h3>
@@ -3496,7 +3648,7 @@ function renderRoadmap() {
       ${blockers.length ? `<div class="rm-blockers"><div class="k">Blockers on the critical path</div><ul>${blockers.map(b => `<li>${b}</li>`).join('')}</ul></div>` : ''}
     </div>
     ${worklog}
-    <div class="rm-grid">${stages}</div>`);
+    ${noStageMatches ? `<div class="empty" style="padding:18px 0">No roadmap steps match “${esc(SEARCH_Q)}”.</div>` : `<div class="rm-grid">${stages}</div>`}`);
   startRmPulse();
 }
 
@@ -3553,6 +3705,15 @@ const PLUS_COMPARE = [
   { feat: 'Voice story length', sub: 'Max length of a voice story you record',
     free: '30 seconds',
     plus: { hi:true, text:'120 seconds' } },
+  { feat: 'Comments', sub: 'Comments and replies you can post per day',
+    free: '3/day free, then 5 Ripples each',
+    plus: { hi:true, text:'Unlimited, no Ripple cost' } },
+  { feat: 'Local mode', sub: 'Comments, voices and voters near you',
+    free: { ok:false, text:'Worldwide only' },
+    plus: { ok:true,  text:'People, comments and discussions near you prioritized first' } },
+  { feat: 'Daily Parallel', sub: 'One AI-picked Like-Minded match a day',
+    free: { ok:false, text:'Not available' },
+    plus: { ok:true,  text:'One 90%+ match daily, with combinable filters (friends, networking, gender, age range)' } },
 
   { group: 'Privacy · Like-Minded' },
   { feat: 'Like-Minded sharing', sub: 'Seeing how like-minded you are to others',
