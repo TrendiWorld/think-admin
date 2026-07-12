@@ -639,6 +639,19 @@
     .hide-sm { display:none; }
     .o-row { flex-wrap:wrap; padding:16px 18px; }
     .o-row .act { width:100%; justify-content:flex-end; margin-top:4px; }
+    /* Topbar (title + search + refresh/sign-out) was overflowing horizontally
+       on a phone — title, the always-visible search box and the two header
+       buttons don't fit on one row below ~700px. Wrap onto two rows: title +
+       buttons stay on top, search takes its own full-width row underneath,
+       so it's actually usable instead of squeezed to a ~48px sliver. */
+    .topbar { flex-wrap:wrap; row-gap:10px; }
+    .sec-title { font-size:20px; }
+    /* ID selector, not .topsearch — the base .topsearch{max-width:340px} rule
+       is defined LATER in the stylesheet with equal specificity, so a same-
+       specificity override placed earlier in source order loses the cascade
+       regardless of this media query matching. #topSearchWrap always wins. */
+    #topSearchWrap { order:3; flex:1 1 100%; max-width:none; }
+    #lastRefresh { display:none; }
   }
 
   /* ── Touch: no hover-driven movement on touch devices ── */
